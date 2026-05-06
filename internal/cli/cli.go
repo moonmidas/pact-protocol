@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"pact/internal/audit"
 	"pact/internal/pairing"
 	"pact/internal/protocol"
+	"pact/internal/relay"
 	"pact/internal/requests"
 	"pact/internal/store"
 )
@@ -48,6 +50,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runDemo(args[1:], stdout, stderr)
 	case "payload":
 		return runPayload(args[1:], stdout, stderr)
+	case "relay":
+		return runRelay(args[1:], stdout, stderr)
+	case "link":
+		return runLink(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		printUsage(stderr)
@@ -71,6 +77,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  demo")
 	fmt.Fprintln(w, "  payload create")
 	fmt.Fprintln(w, "  payload import")
+	fmt.Fprintln(w, "  relay serve")
+	fmt.Fprintln(w, "  link create")
+	fmt.Fprintln(w, "  link open")
 }
 
 func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -455,6 +464,154 @@ func runPayloadImport(args []string, stdout io.Writer, stderr io.Writer) int {
 	messages, err := requests.ListInbox(store.NewPaths(*root), *as)
 	if err != nil {
 		fmt.Fprintf(stderr, "payload import inbox: %v\n", err)
+		return 1
+	}
+	for _, msg := range messages {
+		if msg.CorrelationID == record.ID {
+			renderInboxCard(stdout, *as, msg)
+		}
+	}
+	return 0
+}
+
+func runRelay(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "serve" {
+		fmt.Fprintln(stderr, "Usage: pact relay serve --addr :4319 --storage <dir> --base-url <url>")
+		return 2
+	}
+	fs := flag.NewFlagSet("relay serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addr := fs.String("addr", ":4319", "listen address")
+	storage := fs.String("storage", ".pact-relay", "relay storage directory")
+	baseURL := fs.String("base-url", "http://localhost:4319", "public base URL")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	fmt.Fprintf(stdout, "Pact relay listening on %s\n", *addr)
+	if err := http.ListenAndServe(*addr, relay.New(*storage, *baseURL).Handler()); err != nil {
+		fmt.Fprintf(stderr, "relay serve: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runLink(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: pact link <create|open>")
+		return 2
+	}
+	switch args[0] {
+	case "create":
+		return runLinkCreate(args[1:], stdout, stderr)
+	case "open":
+		return runLinkOpen(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, "Usage: pact link <create|open>")
+		return 2
+	}
+}
+
+func runLinkCreate(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "Usage: pact link create <path> --from <profile> --to <name> --relay <url>")
+		return 2
+	}
+	sharePath := args[0]
+	fs := flag.NewFlagSet("link create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", ".pact-local", "storage root")
+	from := fs.String("from", "", "profile creating link")
+	to := fs.String("to", "", "recipient name")
+	relayURL := fs.String("relay", "https://wepact.online", "relay base URL")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *from == "" || *to == "" {
+		fmt.Fprintln(stderr, "--from and --to are required")
+		return 2
+	}
+	payload, err := requests.ExportSharePayload(store.NewPaths(*root), *from, *to, sharePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "link create: %v\n", err)
+		return 1
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "link create: %v\n", err)
+		return 1
+	}
+	resp, err := http.Post(strings.TrimRight(*relayURL, "/")+"/api/payloads", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		fmt.Fprintf(stderr, "link create: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		fmt.Fprintf(stderr, "link create: relay returned %s\n", resp.Status)
+		return 1
+	}
+	var created relay.CreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		fmt.Fprintf(stderr, "link create: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "created Pact link %s\n", created.URL)
+	fmt.Fprintln(stdout, "Send this link to the recipient or paste it into their agent.")
+	return 0
+}
+
+func runLinkOpen(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "Usage: pact link open <url> --as <profile>")
+		return 2
+	}
+	link := args[0]
+	fs := flag.NewFlagSet("link open", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", ".pact-local", "storage root")
+	as := fs.String("as", "", "profile opening link")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *as == "" {
+		fmt.Fprintln(stderr, "--as is required")
+		return 2
+	}
+	payloadURL := strings.Replace(link, "/i/", "/api/payloads/", 1)
+	resp, err := http.Get(payloadURL)
+	if err != nil {
+		fmt.Fprintf(stderr, "link open: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(stderr, "link open: relay returned %s\n", resp.Status)
+		return 1
+	}
+	tmp, err := os.CreateTemp("", "pact-link-*.json")
+	if err != nil {
+		fmt.Fprintf(stderr, "link open: %v\n", err)
+		return 1
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		fmt.Fprintf(stderr, "link open: %v\n", err)
+		return 1
+	}
+	if err := tmp.Close(); err != nil {
+		fmt.Fprintf(stderr, "link open: %v\n", err)
+		return 1
+	}
+	record, err := requests.ImportSharePayload(store.NewPaths(*root), *as, tmp.Name())
+	if err != nil {
+		fmt.Fprintf(stderr, "link open: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "opened Pact request %s\n\n", record.ID)
+	messages, err := requests.ListInbox(store.NewPaths(*root), *as)
+	if err != nil {
+		fmt.Fprintf(stderr, "link open inbox: %v\n", err)
 		return 1
 	}
 	for _, msg := range messages {

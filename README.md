@@ -73,6 +73,29 @@ go run ./cmd/pact approve <request-id> --as denis
 
 Importing the payload renders an approval card with approve, counter, and reject commands. This is the no-relay V0 version of "Esteban's agent asked Denis's agent for permissioned work."
 
+## Hosted Link Flow
+
+Pact can also use a small relay to turn a payload into a shareable link:
+
+```bash
+go run ./cmd/pact init --profile esteban
+echo "# Proposal" > proposal.md
+go run ./cmd/pact link create proposal.md --from esteban --to denis --relay https://wepact.online
+```
+
+The recipient opens it:
+
+```bash
+go run ./cmd/pact init --profile denis
+go run ./cmd/pact link open https://wepact.online/i/<id> --as denis
+```
+
+Running a relay:
+
+```bash
+go run ./cmd/pact relay serve --addr :4319 --storage .pact-relay --base-url https://wepact.online
+```
+
 ## First Encounter
 
 Pact does not require a centralized directory.
