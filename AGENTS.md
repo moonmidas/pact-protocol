@@ -13,7 +13,7 @@ The current implementation is a Go CLI in this repository. It uses local JSON fi
 From the repository root:
 
 ```bash
-go test ./...
+CGO_ENABLED=0 go test ./...
 go build -o pact ./cmd/pact
 ./pact help
 ```
@@ -40,7 +40,7 @@ go run ./cmd/pact demo
 Run:
 
 ```bash
-go test ./...
+CGO_ENABLED=0 go test ./...
 go build -o pact ./cmd/pact
 ./pact help
 ```
@@ -101,6 +101,25 @@ If Denis is not on the same local Pact store, create a portable payload instead:
 
 Tell the user to send `pact-payload.json` to Denis or paste its JSON into Denis's agent.
 
+If Denis can receive a hosted link, prefer the hosted invite flow:
+
+```bash
+./pact link create <path> --from <sender-profile> --to denis --relay https://wepact.online
+```
+
+Tell the user to send the printed `https://wepact.online/i/<id>` link to Denis.
+
+### "Open this Pact link"
+
+Initialize the recipient profile if needed, then run:
+
+```bash
+./pact init --profile <recipient-profile>
+./pact link open <pact-link> --as <recipient-profile>
+```
+
+After opening, show the approval card. Explain that approving copies the artifact into the recipient's local received folder, rejecting leaves it untouched, and countering asks for different terms.
+
 ### "Import this Pact payload"
 
 Save the payload JSON to a file if needed, initialize the recipient profile if needed, then run:
@@ -111,6 +130,7 @@ Save the payload JSON to a file if needed, initialize the recipient profile if n
 ```
 
 After import, show the approval card and let the user choose approve, counter, or reject.
+If import fails with `artifact hash mismatch`, tell the user the payload content changed after creation and should not be approved.
 
 ### "Approve / reject / counter this request"
 
@@ -130,8 +150,7 @@ Then show the relevant audit command:
 
 ## Current Limitations
 
-- V0 is local-only and simulates both sides on one machine.
-- There is no hosted relay yet.
+- V0 uses local JSON state and supports portable payloads plus a simple hosted relay.
 - There is no global directory yet.
 - There is no real Codex/Claude marketplace plugin yet.
 - The agent integration is currently instruction-based: agents read this file and call the Pact CLI.

@@ -201,3 +201,43 @@ func TestExportAndImportSharePayload(t *testing.T) {
 		t.Fatalf("expected received artifact: %v", err)
 	}
 }
+
+func TestApproveImportedPayloadWhenSenderProfileExistsWithoutSenderRequest(t *testing.T) {
+	root := t.TempDir()
+	paths := store.NewPaths(root)
+	if _, err := pairing.InitProfile(paths, "esteban"); err != nil {
+		t.Fatalf("init sender: %v", err)
+	}
+	if _, err := pairing.InitProfile(paths, "denis"); err != nil {
+		t.Fatalf("init receiver: %v", err)
+	}
+
+	filePath := filepath.Join(root, "proposal.md")
+	if err := os.WriteFile(filePath, []byte("# Proposal\n\nRelay import.\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	payload, err := ExportSharePayload(paths, "esteban", "denis", filePath)
+	if err != nil {
+		t.Fatalf("ExportSharePayload: %v", err)
+	}
+	payloadPath := filepath.Join(root, "payload.json")
+	if err := store.WriteJSON(payloadPath, payload); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	record, err := ImportSharePayload(paths, "denis", payloadPath)
+	if err != nil {
+		t.Fatalf("ImportSharePayload: %v", err)
+	}
+
+	updated, err := Approve(paths, "denis", record.ID)
+	if err != nil {
+		t.Fatalf("approve imported request with local sender profile: %v", err)
+	}
+	if updated.State != protocol.StateApproved {
+		t.Fatalf("expected approved, got %q", updated.State)
+	}
+	received := filepath.Join(paths.ReceivedArtifactsDir("denis"), record.Artifact.ID, "proposal.md")
+	if _, err := os.Stat(received); err != nil {
+		t.Fatalf("expected received artifact: %v", err)
+	}
+}

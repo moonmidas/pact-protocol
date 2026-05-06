@@ -1,148 +1,238 @@
 # Pact Protocol
 
-Pact is a local-first protocol and reference CLI for permissioned agent work.
+This folder contains the open protocol reference implementation and agent-facing instructions.
 
-The core idea:
-
-> My agent can safely ask your agent to do work, and both of us can see, approve, counter, reject, and audit what happened.
-
-Pact is not agent chat. It is a small permission layer for delegated work between people and their agents.
-
-## What Works Today
-
-This repository contains a dependency-light Go CLI that simulates two people, their local gateways, pairing, file-share requests, decisions, and audit logs on one machine.
-
-The current V0 supports:
-
-- creating local profiles
-- creating a local pairing invite
-- accepting an invite as a contact
-- requesting to share a file
-- listing a recipient inbox
-- approving a request
-- rejecting a request
-- countering a request
-- inspecting audit logs
-
-## Quick Demo
-
-Run:
-
-```bash
-go run ./cmd/pact demo
-```
-
-That creates local `esteban` and `denis` profiles, pairs Esteban with Denis, shares a demo proposal, approves it as Denis, and prints commands to inspect the inbox and audit logs.
-
-## Manual Flow
-
-```bash
-go run ./cmd/pact init --profile denis
-go run ./cmd/pact init --profile esteban
-go run ./cmd/pact invite create --from denis
-go run ./cmd/pact pair accept .pact-local/invites/<invite>.json --as esteban --handle denis
-echo "# Proposal" > proposal.md
-go run ./cmd/pact request share proposal.md --from esteban --to denis
-go run ./cmd/pact inbox --as denis
-go run ./cmd/pact approve <request-id> --as denis
-go run ./cmd/pact audit --as denis
-go run ./cmd/pact audit --as esteban
-```
-
-## Copy-Paste Payload Flow
-
-For the first cross-agent experience, Pact can create a portable JSON payload that another person can import into their own local Pact inbox.
-
-Sender:
-
-```bash
-go run ./cmd/pact init --profile esteban
-echo "# Proposal" > proposal.md
-go run ./cmd/pact payload create proposal.md --from esteban --to denis --out pact-payload.json
-```
-
-Send `pact-payload.json` to Denis or paste its JSON into Denis's agent.
-
-Receiver:
-
-```bash
-go run ./cmd/pact init --profile denis
-go run ./cmd/pact payload import pact-payload.json --as denis
-go run ./cmd/pact approve <request-id> --as denis
-```
-
-Importing the payload renders an approval card with approve, counter, and reject commands. This is the no-relay V0 version of "Esteban's agent asked Denis's agent for permissioned work."
-
-## Hosted Link Flow
-
-Pact can also use a small relay to turn a payload into a shareable link:
-
-```bash
-go run ./cmd/pact init --profile esteban
-echo "# Proposal" > proposal.md
-go run ./cmd/pact link create proposal.md --from esteban --to denis --relay https://wepact.online
-```
-
-The recipient opens it:
-
-```bash
-go run ./cmd/pact init --profile denis
-go run ./cmd/pact link open https://wepact.online/i/<id> --as denis
-```
-
-Running a relay:
-
-```bash
-go run ./cmd/pact relay serve --addr :4319 --storage .pact-relay --base-url https://wepact.online
-```
-
-## First Encounter
-
-Pact does not require a centralized directory.
-
-A user should be able to tell their agent:
+It is the only project currently published to:
 
 ```text
-Pact with Denis.
+https://github.com/moonmidas/pact-protocol
 ```
 
-The agent can create a local invite that Denis can paste into his own agent. A future hosted service can make this smoother with shareable links, but the protocol should not require a central directory to start.
+## Contents
 
-## Agent Integration
-
-This repo includes instruction files for agent-first use:
-
-- `AGENTS.md`: general coding-agent instructions
-- `agents/codex/SKILL.md`: Codex-style skill instructions
-- `agents/claude/CLAUDE.md`: Claude-style instructions
-- `agents/mcp/README.md`: future MCP wrapper plan
-
-The current integration is instruction-based: an agent reads the instructions, builds or runs the CLI, and uses Pact commands. A future MCP server or marketplace plugin should be a thin wrapper around the same core behavior.
-
-## Safety Defaults
-
-- Pairing creates a contact; it does not grant access.
-- Requests must be approved, rejected, or countered.
-- Secret-like files such as `.env` are refused by the CLI.
-- Pact writes audit logs for meaningful actions.
-- V0 is a local demo, not a hardened security boundary.
+- `cmd/pact`: Go CLI entrypoint.
+- `internal`: Protocol, local store, requests, relay, and CLI implementation.
+- `agents`: Codex/Claude/MCP instruction layer.
+- `AGENTS.md`: Repo-level instructions for coding agents using Pact.
+- `go.mod`: Go module.
 
 ## Development
 
-Run tests:
+Run from this folder:
 
 ```bash
-go test ./...
+CGO_ENABLED=0 go test ./...
+go build -o pact ./cmd/pact
+./pact demo
 ```
 
-Build:
+## First-Test CLI Flows
+
+Build the CLI from this folder:
 
 ```bash
 go build -o pact ./cmd/pact
 ```
 
-Run help:
+Create the sender profile once:
 
 ```bash
-./pact help
+./pact init --profile esteban
 ```
+
+### Hosted Link
+
+Use this when the receiver can open a web link:
+
+```bash
+./pact link create proposal.md --from esteban --to denis --relay https://wepact.online
+```
+
+Send Denis the printed `https://wepact.online/i/<id>` link. Denis or Denis's agent can import it with:
+
+```bash
+./pact init --profile denis
+./pact link open https://wepact.online/i/<id> --as denis
+```
+
+Opening a link imports the request into Denis's local inbox and prints the approval card with the sender, artifact name, size, preview, risk note, request ID, and approve/counter/reject commands.
+
+### Portable Payload
+
+Use this when no hosted relay is available:
+
+```bash
+./pact payload create proposal.md --from esteban --to denis --out pact-payload.json
+```
+
+Send Denis `pact-payload.json` or paste its JSON into his agent. Denis imports it with:
+
+```bash
+./pact init --profile denis
+./pact payload import pact-payload.json --as denis
+```
+
+Pact verifies the embedded artifact hash during import. If the payload content was changed after creation, import fails before writing the request.
+
+### Decisions
+
+After reviewing the approval card:
+
+```bash
+./pact approve <request-id> --as denis
+./pact counter <request-id> --as denis --message "Send a summary instead."
+./pact reject <request-id> --as denis
+```
+
+Approving copies the artifact into Denis's local received folder and writes audit events. Countering or rejecting records the decision without copying the artifact.
+
+## App JSON Bridge
+
+The human CLI output is meant for terminals. App and plugin integrations should pass `--json` and read stdout as one JSON object.
+
+Supported JSON operations:
+
+```bash
+./pact inbox --as denis --json
+./pact link open https://wepact.online/i/<id> --as denis --json
+./pact payload import pact-payload.json --as denis --json
+./pact approve <request-id> --as denis --json
+./pact counter <request-id> --as denis --message "Send a summary instead." --json
+./pact reject <request-id> --as denis --json
+```
+
+Successful `inbox` response:
+
+```json
+{
+  "ok": true,
+  "operation": "inbox",
+  "profile": "denis",
+  "count": 1,
+  "requests": [
+    {
+      "id": "req_...",
+      "message_id": "msg_...",
+      "type": "artifact.share",
+      "state": "delivered",
+      "from_profile": "esteban",
+      "to_profile": "denis",
+      "artifact": {
+        "id": "art_...",
+        "name": "proposal.md",
+        "size_bytes": 123,
+        "mime": "text/markdown; charset=utf-8",
+        "sha256": "...",
+        "pending_path": ".pact-local/profiles/denis/artifacts/pending/...",
+        "preview": "# Proposal First paragraph..."
+      },
+      "actions": {
+        "approve": "pact approve req_... --as denis",
+        "counter": "pact counter req_... --as denis --message \"Send a summary instead.\"",
+        "reject": "pact reject req_... --as denis"
+      },
+      "created_at": "2026-05-06T12:00:00Z",
+      "updated_at": "2026-05-06T12:00:05Z"
+    }
+  ]
+}
+```
+
+An empty inbox keeps the same shape with `"count": 0` and `"requests": []`.
+
+Successful `link.open` and `payload.import` responses:
+
+```json
+{
+  "ok": true,
+  "operation": "link.open",
+  "source_url": "https://wepact.online/i/example",
+  "request": {
+    "id": "req_...",
+    "message_id": "msg_...",
+    "type": "artifact.share",
+    "state": "delivered",
+    "from_profile": "esteban",
+    "to_profile": "denis",
+    "artifact": {
+      "id": "art_...",
+      "name": "proposal.md",
+      "size_bytes": 123,
+      "mime": "text/markdown; charset=utf-8",
+      "sha256": "...",
+      "pending_path": ".pact-local/profiles/denis/artifacts/pending/...",
+      "preview": "# Proposal First paragraph..."
+    },
+    "created_at": "2026-05-06T12:00:00Z",
+    "updated_at": "2026-05-06T12:00:05Z"
+  },
+  "actions": {
+    "approve": "pact approve req_... --as denis",
+    "counter": "pact counter req_... --as denis --message \"Send a summary instead.\"",
+    "reject": "pact reject req_... --as denis"
+  }
+}
+```
+
+`payload.import` uses the same shape with `"operation": "payload.import"` and no `source_url`.
+
+Successful decision responses:
+
+```json
+{
+  "ok": true,
+  "operation": "approve",
+  "request": {
+    "id": "req_...",
+    "state": "approved",
+    "from_profile": "esteban",
+    "to_profile": "denis",
+    "artifact": {
+      "id": "art_...",
+      "name": "proposal.md",
+      "size_bytes": 123,
+      "mime": "text/markdown; charset=utf-8",
+      "sha256": "...",
+      "pending_path": ".pact-local/profiles/denis/artifacts/pending/...",
+      "preview": "# Proposal First paragraph..."
+    },
+    "created_at": "2026-05-06T12:00:00Z",
+    "updated_at": "2026-05-06T12:01:00Z"
+  },
+  "decision": {
+    "type": "approved",
+    "request_id": "req_...",
+    "by_profile": "denis",
+    "created_at": "2026-05-06T12:01:00Z"
+  }
+}
+```
+
+For `counter`, `operation` is `"counter"`, `decision.type` is `"countered"`, and `decision.message` contains the counteroffer. For `reject`, `operation` is `"reject"` and `decision.type` is `"denied"`.
+
+JSON errors are also written to stdout for app-facing commands:
+
+```json
+{
+  "ok": false,
+  "operation": "link.open",
+  "error": {
+    "code": "invalid_invite_url",
+    "message": "expected an absolute Pact invite URL like https://wepact.online/i/<id>"
+  }
+}
+```
+
+Current error codes include `invalid_arguments`, `invalid_invite_url`, `missing_required_argument`, `missing_required_flag`, `request_not_found`, `request_not_pending`, `profile_not_found`, `artifact_hash_mismatch`, `artifact_hash_missing`, `unsupported_payload_type`, `relay_error`, `network_error`, `temp_file_error`, `relay_read_error`, `inbox_read_error`, and `operation_failed`.
+
+Reference fixture:
+
+```text
+examples/app-inbox.json
+```
+
+Use this fixture when wiring an app renderer before calling the real CLI.
+
+## Public Export Rule
+
+When publishing to the public `pact-protocol` repo, export only this folder's public protocol files. Do not export root private docs, `app/`, `site/`, or `docs/`.

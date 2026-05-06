@@ -236,6 +236,13 @@ func ImportSharePayload(paths store.Paths, asProfile string, payloadPath string)
 		return protocol.RequestRecord{}, fmt.Errorf("decode artifact: %w", err)
 	}
 	record := payload.Request
+	actualHash := sha256.Sum256(content)
+	if record.Artifact.SHA256 == "" {
+		return protocol.RequestRecord{}, fmt.Errorf("artifact hash is missing")
+	}
+	if hex.EncodeToString(actualHash[:]) != record.Artifact.SHA256 {
+		return protocol.RequestRecord{}, fmt.Errorf("artifact hash mismatch for %s", record.Artifact.Name)
+	}
 	record.State = protocol.StateDelivered
 	record.ToProfile = asProfile
 	record.UpdatedAt = time.Now().UTC()
@@ -451,7 +458,7 @@ func updateSenderRequest(paths store.Paths, senderProfile string, record protoco
 			return store.WriteJSONArray(paths.RequestsFile(senderProfile), requests)
 		}
 	}
-	return fmt.Errorf("sender request not found: %s", record.ID)
+	return nil
 }
 
 func createGrant(paths store.Paths, profile string, requestID string, now time.Time) error {
