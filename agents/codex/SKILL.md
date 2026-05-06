@@ -22,6 +22,8 @@ go build -o pact ./cmd/pact
 ./pact invite create --from <profile>
 ./pact pair accept <invite-file> --as <profile> --handle <handle>
 ./pact request share <path> --from <profile> --to <handle>
+./pact payload create <path> --from <profile> --to <name> --out pact-payload.json
+./pact payload import <payload-file> --as <profile>
 ./pact inbox --as <profile>
 ./pact approve <request-id> --as <profile>
 ./pact reject <request-id> --as <profile>
@@ -46,3 +48,18 @@ If a requested contact is not paired, create an invite and ask the user to send 
 
 The other person can paste the invite into their own agent, which should install Pact from the repository and run `pair accept`.
 
+## Cross-Agent Payload
+
+If the other person is not paired in the same local store, prefer a portable payload:
+
+```bash
+./pact payload create <path> --from <profile> --to <name> --out pact-payload.json
+```
+
+The recipient's agent imports it:
+
+```bash
+./pact payload import pact-payload.json --as <profile>
+```
+
+Import renders an approval card with exact approve, counter, and reject commands.

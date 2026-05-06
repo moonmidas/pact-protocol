@@ -49,6 +49,30 @@ go run ./cmd/pact audit --as denis
 go run ./cmd/pact audit --as esteban
 ```
 
+## Copy-Paste Payload Flow
+
+For the first cross-agent experience, Pact can create a portable JSON payload that another person can import into their own local Pact inbox.
+
+Sender:
+
+```bash
+go run ./cmd/pact init --profile esteban
+echo "# Proposal" > proposal.md
+go run ./cmd/pact payload create proposal.md --from esteban --to denis --out pact-payload.json
+```
+
+Send `pact-payload.json` to Denis or paste its JSON into Denis's agent.
+
+Receiver:
+
+```bash
+go run ./cmd/pact init --profile denis
+go run ./cmd/pact payload import pact-payload.json --as denis
+go run ./cmd/pact approve <request-id> --as denis
+```
+
+Importing the payload renders an approval card with approve, counter, and reject commands. This is the no-relay V0 version of "Esteban's agent asked Denis's agent for permissioned work."
+
 ## First Encounter
 
 Pact does not require a centralized directory.
@@ -99,4 +123,3 @@ Run help:
 ```bash
 ./pact help
 ```
-

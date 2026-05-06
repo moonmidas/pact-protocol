@@ -26,6 +26,8 @@ go run ./cmd/pact demo
 - Create invite: `./pact invite create --from <profile>`
 - Accept invite: `./pact pair accept <invite-file> --as <profile> --handle <handle>`
 - Request file share: `./pact request share <path> --from <profile> --to <handle>`
+- Create portable payload: `./pact payload create <path> --from <profile> --to <name> --out pact-payload.json`
+- Import portable payload: `./pact payload import <payload-file> --as <profile>`
 - List inbox: `./pact inbox --as <profile>`
 - Approve: `./pact approve <request-id> --as <profile>`
 - Reject: `./pact reject <request-id> --as <profile>`
@@ -36,3 +38,18 @@ go run ./cmd/pact demo
 
 Before using Pact to send or approve anything, explain the action and the scope to the user. Do not bypass Pact's CLI for Pact workflows. Do not share secret-like files.
 
+## Cross-Agent Payload Flow
+
+When the sender and recipient are on different machines and there is no relay yet, use a portable payload:
+
+```bash
+./pact payload create proposal.md --from esteban --to denis --out pact-payload.json
+```
+
+The recipient's agent can import it:
+
+```bash
+./pact payload import pact-payload.json --as denis
+```
+
+After import, show the request card and ask whether to approve, counter, or reject.

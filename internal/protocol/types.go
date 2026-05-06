@@ -134,3 +134,12 @@ type AuditEvent struct {
 	MessageType    string    `json:"message_type"`
 	Summary        string    `json:"summary"`
 }
+
+type SharePayload struct {
+	Type                  string        `json:"type"`
+	Version               string        `json:"version"`
+	CreatedAt             time.Time     `json:"created_at"`
+	Envelope              Envelope      `json:"envelope"`
+	Request               RequestRecord `json:"request"`
+	ArtifactContentBase64 string        `json:"artifact_content_base64"`
+}

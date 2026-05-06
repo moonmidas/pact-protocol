@@ -161,3 +161,43 @@ func TestCounterRecordsMessage(t *testing.T) {
 		t.Fatalf("unexpected decision: %#v", updated.Decision)
 	}
 }
+
+func TestExportAndImportSharePayload(t *testing.T) {
+	senderRoot := t.TempDir()
+	senderPaths := store.NewPaths(senderRoot)
+	if _, err := pairing.InitProfile(senderPaths, "esteban"); err != nil {
+		t.Fatalf("init sender: %v", err)
+	}
+	filePath := filepath.Join(senderRoot, "proposal.md")
+	if err := os.WriteFile(filePath, []byte("# Proposal\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	payload, err := ExportSharePayload(senderPaths, "esteban", "denis", filePath)
+	if err != nil {
+		t.Fatalf("ExportSharePayload: %v", err)
+	}
+
+	receiverRoot := t.TempDir()
+	receiverPaths := store.NewPaths(receiverRoot)
+	if _, err := pairing.InitProfile(receiverPaths, "denis"); err != nil {
+		t.Fatalf("init receiver: %v", err)
+	}
+	payloadPath := filepath.Join(receiverRoot, "payload.json")
+	if err := store.WriteJSON(payloadPath, payload); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	record, err := ImportSharePayload(receiverPaths, "denis", payloadPath)
+	if err != nil {
+		t.Fatalf("ImportSharePayload: %v", err)
+	}
+	if record.State != protocol.StateDelivered {
+		t.Fatalf("expected delivered, got %s", record.State)
+	}
+	if _, err := Approve(receiverPaths, "denis", record.ID); err != nil {
+		t.Fatalf("approve imported request: %v", err)
+	}
+	received := filepath.Join(receiverPaths.ReceivedArtifactsDir("denis"), record.Artifact.ID, "proposal.md")
+	if _, err := os.Stat(received); err != nil {
+		t.Fatalf("expected received artifact: %v", err)
+	}
+}

@@ -46,6 +46,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runAudit(args[1:], stdout, stderr)
 	case "demo":
 		return runDemo(args[1:], stdout, stderr)
+	case "payload":
+		return runPayload(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		printUsage(stderr)
@@ -67,6 +69,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  counter")
 	fmt.Fprintln(w, "  audit")
 	fmt.Fprintln(w, "  demo")
+	fmt.Fprintln(w, "  payload create")
+	fmt.Fprintln(w, "  payload import")
 }
 
 func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -190,7 +194,7 @@ func runInbox(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	}
 	for _, msg := range messages {
-		fmt.Fprintf(stdout, "%s %s from %s %s\n", msg.CorrelationID, msg.Type, msg.From.Profile, artifactName(msg.Body))
+		renderInboxCard(stdout, *as, msg)
 	}
 	return 0
 }
@@ -270,6 +274,46 @@ func artifactName(body json.RawMessage) string {
 	return filepath.Base(string(body))
 }
 
+func renderInboxCard(stdout io.Writer, profile string, msg protocol.Envelope) {
+	var record protocol.RequestRecord
+	_ = json.Unmarshal(msg.Body, &record)
+	name := record.Artifact.Name
+	if name == "" {
+		name = "unknown artifact"
+	}
+	size := humanBytes(record.Artifact.SizeBytes)
+	risk := "Low"
+	if strings.Contains(strings.ToLower(name), "secret") {
+		risk = "Needs review"
+	}
+
+	fmt.Fprintln(stdout, "┌─ Pact Request ─────────────────────────────────────")
+	fmt.Fprintf(stdout, "│ From:    %s\n", msg.From.Profile)
+	fmt.Fprintf(stdout, "│ To:      %s\n", profile)
+	fmt.Fprintf(stdout, "│ Wants:   Share %s\n", name)
+	fmt.Fprintf(stdout, "│ Size:    %s\n", size)
+	fmt.Fprintf(stdout, "│ Risk:    %s\n", risk)
+	fmt.Fprintf(stdout, "│ Request: %s\n", msg.CorrelationID)
+	fmt.Fprintln(stdout, "│")
+	fmt.Fprintf(stdout, "│ Approve: pact approve %s --as %s\n", msg.CorrelationID, profile)
+	fmt.Fprintf(stdout, "│ Counter: pact counter %s --as %s --message \"Send a summary instead.\"\n", msg.CorrelationID, profile)
+	fmt.Fprintf(stdout, "│ Reject:  pact reject %s --as %s\n", msg.CorrelationID, profile)
+	fmt.Fprintln(stdout, "└────────────────────────────────────────────────────")
+}
+
+func humanBytes(size int64) string {
+	if size < 0 {
+		return "unknown"
+	}
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+}
+
 func runDemo(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -322,5 +366,101 @@ func runDemo(args []string, stdout io.Writer, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  pact inbox --root %s --as denis\n", *root)
 	fmt.Fprintf(stdout, "  pact audit --root %s --as denis\n", *root)
 	fmt.Fprintf(stdout, "  pact audit --root %s --as esteban\n", *root)
+	return 0
+}
+
+func runPayload(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: pact payload <create|import>")
+		return 2
+	}
+	switch args[0] {
+	case "create":
+		return runPayloadCreate(args[1:], stdout, stderr)
+	case "import":
+		return runPayloadImport(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, "Usage: pact payload <create|import>")
+		return 2
+	}
+}
+
+func runPayloadCreate(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "Usage: pact payload create <path> --from <profile> --to <name> --out <file>")
+		return 2
+	}
+	sharePath := args[0]
+	fs := flag.NewFlagSet("payload create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", ".pact-local", "storage root")
+	from := fs.String("from", "", "profile creating payload")
+	to := fs.String("to", "", "recipient name")
+	out := fs.String("out", "", "payload output file")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *from == "" || *to == "" {
+		fmt.Fprintln(stderr, "--from and --to are required")
+		return 2
+	}
+	payload, err := requests.ExportSharePayload(store.NewPaths(*root), *from, *to, sharePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "payload create: %v\n", err)
+		return 1
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "payload create: %v\n", err)
+		return 1
+	}
+	if *out != "" {
+		if err := os.WriteFile(*out, append(data, '\n'), 0o644); err != nil {
+			fmt.Fprintf(stderr, "payload create: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "created Pact payload %s\n", *out)
+		fmt.Fprintln(stdout, "Send this file or paste its JSON into the recipient's agent.")
+		return 0
+	}
+	fmt.Fprintln(stdout, "-----BEGIN PACT PAYLOAD-----")
+	fmt.Fprintln(stdout, string(data))
+	fmt.Fprintln(stdout, "-----END PACT PAYLOAD-----")
+	return 0
+}
+
+func runPayloadImport(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "Usage: pact payload import <payload-file> --as <profile>")
+		return 2
+	}
+	payloadPath := args[0]
+	fs := flag.NewFlagSet("payload import", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	root := fs.String("root", ".pact-local", "storage root")
+	as := fs.String("as", "", "profile importing payload")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *as == "" {
+		fmt.Fprintln(stderr, "--as is required")
+		return 2
+	}
+	record, err := requests.ImportSharePayload(store.NewPaths(*root), *as, payloadPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "payload import: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "imported Pact request %s\n\n", record.ID)
+	messages, err := requests.ListInbox(store.NewPaths(*root), *as)
+	if err != nil {
+		fmt.Fprintf(stderr, "payload import inbox: %v\n", err)
+		return 1
+	}
+	for _, msg := range messages {
+		if msg.CorrelationID == record.ID {
+			renderInboxCard(stdout, *as, msg)
+		}
+	}
 	return 0
 }

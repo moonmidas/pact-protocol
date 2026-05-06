@@ -2,6 +2,7 @@ package requests
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"pact/internal/protocol"
 	"pact/internal/store"
 )
+
+const PayloadShareRequest = "pact.share_request"
 
 func ShareFile(paths store.Paths, fromProfile string, toHandle string, filePath string) (protocol.RequestRecord, error) {
 	from, err := pairing.LoadProfile(paths, fromProfile)
@@ -129,6 +132,145 @@ func ShareFile(paths store.Paths, fromProfile string, toHandle string, filePath 
 	return senderRecord, nil
 }
 
+func ExportSharePayload(paths store.Paths, fromProfile string, toProfile string, filePath string) (protocol.SharePayload, error) {
+	from, err := pairing.LoadProfile(paths, fromProfile)
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	if strings.TrimSpace(toProfile) == "" {
+		return protocol.SharePayload{}, fmt.Errorf("to profile is required")
+	}
+	if isSecretLike(filePath) {
+		return protocol.SharePayload{}, fmt.Errorf("refusing to share secret-like file: %s", filePath)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	if info.IsDir() {
+		return protocol.SharePayload{}, fmt.Errorf("share path must be a file: %s", filePath)
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	hash, err := sha256File(filePath)
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	requestID, err := protocol.NewID("req")
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	messageID, err := protocol.NewID("msg")
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	artifactID, err := protocol.NewID("art")
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+
+	now := time.Now().UTC()
+	record := protocol.RequestRecord{
+		ID:          requestID,
+		MessageID:   messageID,
+		Type:        "artifact.share",
+		State:       protocol.StateDelivered,
+		FromProfile: fromProfile,
+		ToProfile:   toProfile,
+		Artifact: protocol.Artifact{
+			ID:         artifactID,
+			Name:       filepath.Base(filePath),
+			SourcePath: filePath,
+			SizeBytes:  info.Size(),
+			SHA256:     hash,
+			MIME:       mimeForPath(filePath),
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	body, err := json.Marshal(record)
+	if err != nil {
+		return protocol.SharePayload{}, err
+	}
+	return protocol.SharePayload{
+		Type:      PayloadShareRequest,
+		Version:   protocol.Version,
+		CreatedAt: now,
+		Envelope: protocol.Envelope{
+			ID:        messageID,
+			Type:      protocol.MessageGrantRequest,
+			Version:   protocol.Version,
+			CreatedAt: now,
+			From: protocol.PartyRef{
+				Profile:   from.Profile,
+				HumanID:   from.HumanID,
+				GatewayID: from.GatewayID,
+			},
+			To: protocol.PartyRef{
+				Profile: toProfile,
+			},
+			CorrelationID: requestID,
+			Body:          body,
+		},
+		Request:               record,
+		ArtifactContentBase64: base64.StdEncoding.EncodeToString(content),
+	}, nil
+}
+
+func ImportSharePayload(paths store.Paths, asProfile string, payloadPath string) (protocol.RequestRecord, error) {
+	profile, err := pairing.LoadProfile(paths, asProfile)
+	if err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	var payload protocol.SharePayload
+	if err := store.ReadJSON(payloadPath, &payload); err != nil {
+		return protocol.RequestRecord{}, fmt.Errorf("read payload: %w", err)
+	}
+	if payload.Type != PayloadShareRequest {
+		return protocol.RequestRecord{}, fmt.Errorf("unsupported payload type: %s", payload.Type)
+	}
+	content, err := base64.StdEncoding.DecodeString(payload.ArtifactContentBase64)
+	if err != nil {
+		return protocol.RequestRecord{}, fmt.Errorf("decode artifact: %w", err)
+	}
+	record := payload.Request
+	record.State = protocol.StateDelivered
+	record.ToProfile = asProfile
+	record.UpdatedAt = time.Now().UTC()
+	pendingPath := filepath.Join(paths.PendingArtifactsDir(asProfile), "imported", record.Artifact.ID, record.Artifact.Name)
+	if err := os.MkdirAll(filepath.Dir(pendingPath), 0o755); err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	if err := os.WriteFile(pendingPath, content, 0o644); err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	record.Artifact.PendingPath = pendingPath
+
+	body, err := json.Marshal(record)
+	if err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	payload.Envelope.To = protocol.PartyRef{
+		Profile:   profile.Profile,
+		HumanID:   profile.HumanID,
+		GatewayID: profile.GatewayID,
+	}
+	payload.Envelope.Body = body
+
+	if err := upsertRequest(paths.RequestsFile(asProfile), record); err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	if err := store.WriteJSON(filepath.Join(paths.InboxDir(asProfile), payload.Envelope.ID+".json"), payload.Envelope); err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	if err := appendAudit(paths, asProfile, "request.delivered", record.ID, protocol.MessageGrantRequest, fmt.Sprintf("Imported request to receive %s from %s.", record.Artifact.Name, record.FromProfile)); err != nil {
+		return protocol.RequestRecord{}, err
+	}
+	return record, nil
+}
+
 func ListInbox(paths store.Paths, profile string) ([]protocol.Envelope, error) {
 	entries, err := os.ReadDir(paths.InboxDir(profile))
 	if os.IsNotExist(err) {
@@ -194,8 +336,11 @@ func decide(paths store.Paths, asProfile string, requestID string, state string,
 
 	senderRecord := record
 	senderRecord.ToProfile = asProfile
-	if err := updateSenderRequest(paths, record.FromProfile, senderRecord); err != nil {
-		return protocol.RequestRecord{}, err
+	senderExists := profileExists(paths, record.FromProfile)
+	if senderExists {
+		if err := updateSenderRequest(paths, record.FromProfile, senderRecord); err != nil {
+			return protocol.RequestRecord{}, err
+		}
 	}
 
 	switch state {
@@ -207,11 +352,13 @@ func decide(paths store.Paths, asProfile string, requestID string, state string,
 		if err := copyFile(record.Artifact.PendingPath, receivedPath); err != nil {
 			return protocol.RequestRecord{}, err
 		}
-		if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantApproved, record); err != nil {
-			return protocol.RequestRecord{}, err
-		}
-		if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageArtifactShared, record); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantApproved, record); err != nil {
+				return protocol.RequestRecord{}, err
+			}
+			if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageArtifactShared, record); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 		if err := appendAudit(paths, asProfile, "request.approved", requestID, protocol.MessageGrantApproved, fmt.Sprintf("Approved receiving %s from %s.", record.Artifact.Name, record.FromProfile)); err != nil {
 			return protocol.RequestRecord{}, err
@@ -219,33 +366,48 @@ func decide(paths store.Paths, asProfile string, requestID string, state string,
 		if err := appendAudit(paths, asProfile, "artifact.received", record.Artifact.ID, protocol.MessageArtifactShared, fmt.Sprintf("Received %s.", record.Artifact.Name)); err != nil {
 			return protocol.RequestRecord{}, err
 		}
-		if err := appendAudit(paths, record.FromProfile, "request.approved", requestID, protocol.MessageGrantApproved, fmt.Sprintf("%s approved receiving %s.", asProfile, record.Artifact.Name)); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := appendAudit(paths, record.FromProfile, "request.approved", requestID, protocol.MessageGrantApproved, fmt.Sprintf("%s approved receiving %s.", asProfile, record.Artifact.Name)); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 	case protocol.StateDenied:
-		if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantDenied, record); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantDenied, record); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 		if err := appendAudit(paths, asProfile, "request.denied", requestID, protocol.MessageGrantDenied, fmt.Sprintf("Rejected receiving %s from %s.", record.Artifact.Name, record.FromProfile)); err != nil {
 			return protocol.RequestRecord{}, err
 		}
-		if err := appendAudit(paths, record.FromProfile, "request.denied", requestID, protocol.MessageGrantDenied, fmt.Sprintf("%s rejected receiving %s.", asProfile, record.Artifact.Name)); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := appendAudit(paths, record.FromProfile, "request.denied", requestID, protocol.MessageGrantDenied, fmt.Sprintf("%s rejected receiving %s.", asProfile, record.Artifact.Name)); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 	case protocol.StateCountered:
-		if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantCounter, record); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := writeDecisionEnvelope(paths, asProfile, record.FromProfile, protocol.MessageGrantCounter, record); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 		if err := appendAudit(paths, asProfile, "request.countered", requestID, protocol.MessageGrantCounter, fmt.Sprintf("Countered request for %s.", record.Artifact.Name)); err != nil {
 			return protocol.RequestRecord{}, err
 		}
-		if err := appendAudit(paths, record.FromProfile, "request.countered", requestID, protocol.MessageGrantCounter, fmt.Sprintf("%s countered request for %s.", asProfile, record.Artifact.Name)); err != nil {
-			return protocol.RequestRecord{}, err
+		if senderExists {
+			if err := appendAudit(paths, record.FromProfile, "request.countered", requestID, protocol.MessageGrantCounter, fmt.Sprintf("%s countered request for %s.", asProfile, record.Artifact.Name)); err != nil {
+				return protocol.RequestRecord{}, err
+			}
 		}
 	default:
 		return protocol.RequestRecord{}, fmt.Errorf("unsupported decision state: %s", state)
 	}
 	return record, nil
+}
+
+func profileExists(paths store.Paths, profile string) bool {
+	_, err := pairing.LoadProfile(paths, profile)
+	return err == nil
 }
 
 func findContact(paths store.Paths, profile string, handle string) (protocol.Contact, error) {

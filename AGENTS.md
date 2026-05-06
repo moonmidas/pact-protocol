@@ -81,7 +81,7 @@ Use the human's requested handle if provided, such as `denis`.
 
 ### "Send this file to Denis"
 
-Use:
+If Denis is paired locally, use:
 
 ```bash
 ./pact request share <path> --from <sender-profile> --to <contact-handle>
@@ -92,6 +92,25 @@ Then show the request ID and tell the user the recipient can inspect it with:
 ```bash
 ./pact inbox --as <recipient-profile>
 ```
+
+If Denis is not on the same local Pact store, create a portable payload instead:
+
+```bash
+./pact payload create <path> --from <sender-profile> --to denis --out pact-payload.json
+```
+
+Tell the user to send `pact-payload.json` to Denis or paste its JSON into Denis's agent.
+
+### "Import this Pact payload"
+
+Save the payload JSON to a file if needed, initialize the recipient profile if needed, then run:
+
+```bash
+./pact init --profile <recipient-profile>
+./pact payload import <payload-file> --as <recipient-profile>
+```
+
+After import, show the approval card and let the user choose approve, counter, or reject.
 
 ### "Approve / reject / counter this request"
 
@@ -116,4 +135,3 @@ Then show the relevant audit command:
 - There is no global directory yet.
 - There is no real Codex/Claude marketplace plugin yet.
 - The agent integration is currently instruction-based: agents read this file and call the Pact CLI.
-
