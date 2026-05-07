@@ -42,6 +42,10 @@ func (p Paths) GrantsFile(profile string) string {
 	return filepath.Join(p.ProfileDir(profile), "grants.json")
 }
 
+func (p Paths) NotificationsFile(profile string) string {
+	return filepath.Join(p.ProfileDir(profile), "notifications.json")
+}
+
 func (p Paths) AuditFile(profile string) string {
 	return filepath.Join(p.ProfileDir(profile), "audit.jsonl")
 }

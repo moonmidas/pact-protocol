@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,7 @@ import (
 
 	"pact/internal/protocol"
 	"pact/internal/relay"
+	"pact/internal/store"
 )
 
 func TestRunShowsHelpForNoArgs(t *testing.T) {
@@ -257,6 +261,42 @@ func TestRunLinkCreateAndOpenHostedPayload(t *testing.T) {
 	}
 	if !strings.Contains(card, "Approving will copy the artifact into denis's received folder") {
 		t.Fatalf("expected approval consequence in card, got %s", card)
+	}
+}
+
+func TestRunInitiateAndAcceptHostedStartLink(t *testing.T) {
+	relayServer := relay.New(t.TempDir(), "")
+	ts := httptest.NewServer(relayServer.Handler())
+	defer ts.Close()
+
+	senderRoot := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"initiate", "denis", "--root", senderRoot, "--as", "esteban", "--relay", ts.URL}, &stdout, &stderr); code != 0 {
+		t.Fatalf("initiate failed: %s", stderr.String())
+	}
+	fields := strings.Fields(stdout.String())
+	link := fields[6]
+	if !strings.HasPrefix(link, ts.URL+"/start/") {
+		t.Fatalf("expected hosted start URL, got %q", stdout.String())
+	}
+
+	receiverRoot := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"accept", link, "--root", receiverRoot, "--as", "denis"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("accept failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "accepted Pact with Esteban as @esteban") {
+		t.Fatalf("unexpected stdout: %s", stdout.String())
+	}
+
+	contacts, err := store.ReadJSONArray[protocol.Contact](store.NewPaths(receiverRoot).ContactsFile("denis"))
+	if err != nil {
+		t.Fatalf("read contacts: %v", err)
+	}
+	if len(contacts) != 1 || contacts[0].Handle != "esteban" {
+		t.Fatalf("expected Denis to have Esteban as contact, got %#v", contacts)
 	}
 }
 
@@ -704,6 +744,102 @@ func TestRunLinkOpenJSONErrorReturnsStableErrorForInvalidURL(t *testing.T) {
 	errObj := response["error"].(map[string]any)
 	if errObj["code"] != "invalid_invite_url" {
 		t.Fatalf("unexpected error object: %#v", errObj)
+	}
+}
+
+func TestAppHandlerRendersAndApprovesRequest(t *testing.T) {
+	root := t.TempDir()
+	requestID := createPendingShareRequestViaCLI(t, root)
+	handler := newAppHandler(store.NewPaths(root), "denis", "https://wepact.online/i/test")
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/app")
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read app: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "Your agent caught a request.") || !strings.Contains(string(body), requestID) {
+		t.Fatalf("expected app approval UI with request id, got %s", string(body))
+	}
+
+	decisionResp, err := ts.Client().PostForm(ts.URL+"/decision", url.Values{
+		"request_id": {requestID},
+		"action":     {"approve"},
+	})
+	if err != nil {
+		t.Fatalf("post decision: %v", err)
+	}
+	_ = decisionResp.Body.Close()
+	if decisionResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected redirected app status 200, got %d", decisionResp.StatusCode)
+	}
+
+	approved, err := ts.Client().Get(ts.URL + "/app")
+	if err != nil {
+		t.Fatalf("get approved app: %v", err)
+	}
+	defer approved.Body.Close()
+	approvedBody, err := io.ReadAll(approved.Body)
+	if err != nil {
+		t.Fatalf("read approved app: %v", err)
+	}
+	if !strings.Contains(string(approvedBody), "approved") {
+		t.Fatalf("expected approved state, got %s", string(approvedBody))
+	}
+}
+
+func TestNotifyContinueAndRunnerTick(t *testing.T) {
+	root := t.TempDir()
+	requestID := createPendingShareRequestViaCLI(t, root)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := Run([]string{"notify", "list", "--root", root, "--as", "denis", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("notify list failed: %s", stderr.String())
+	}
+	var listResponse map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listResponse); err != nil {
+		t.Fatalf("decode notify list: %v\n%s", err, stdout.String())
+	}
+	if listResponse["operation"] != "notify.list" || listResponse["ok"] != true {
+		t.Fatalf("unexpected notify response: %#v", listResponse)
+	}
+	notifications := listResponse["notifications"].([]any)
+	if len(notifications) != 1 {
+		t.Fatalf("expected one notification, got %#v", notifications)
+	}
+	notification := notifications[0].(map[string]any)
+	if notification["request_id"] != requestID {
+		t.Fatalf("expected notification for %s, got %#v", requestID, notification)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"continue", requestID, "--root", root, "--as", "denis", "--for", "codex"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("continue failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Pact continuation for Codex") || !strings.Contains(stdout.String(), requestID) {
+		t.Fatalf("unexpected continuation prompt: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"runner", "tick", "--root", root, "--as", "denis"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runner tick failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "new signal") || !strings.Contains(stdout.String(), "pact continue "+requestID) {
+		t.Fatalf("unexpected runner output: %s", stdout.String())
 	}
 }
 

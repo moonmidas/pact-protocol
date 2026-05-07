@@ -37,7 +37,10 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/payloads", s.handlePayloads)
 	mux.HandleFunc("/api/payloads/", s.handlePayloadByID)
+	mux.HandleFunc("/api/start", s.handleStart)
+	mux.HandleFunc("/api/start/", s.handleStartByID)
 	mux.HandleFunc("/i/", s.handleInvitePage)
+	mux.HandleFunc("/start/", s.handleStartPage)
 	return mux
 }
 
@@ -55,6 +58,14 @@ func (s Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s Server) handlePayloads(w http.ResponseWriter, r *http.Request) {
+	s.handleCreate(w, r, "payloads", s.publicPayloadURL)
+}
+
+func (s Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	s.handleCreate(w, r, "start", s.publicStartURL)
+}
+
+func (s Server) handleCreate(w http.ResponseWriter, r *http.Request, folder string, publicURL func(string) string) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -70,29 +81,39 @@ func (s Server) handlePayloads(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create id", http.StatusInternalServerError)
 		return
 	}
-	if err := os.MkdirAll(s.StorageDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(s.StorageDir, folder), 0o755); err != nil {
 		http.Error(w, "could not create storage", http.StatusInternalServerError)
 		return
 	}
-	if err := os.WriteFile(s.payloadPath(id), append(payload, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(s.itemPath(folder, id), append(payload, '\n'), 0o600); err != nil {
 		http.Error(w, "could not store payload", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusCreated, CreateResponse{ID: id, URL: s.publicURL(id)})
+	writeJSON(w, http.StatusCreated, CreateResponse{ID: id, URL: publicURL(id)})
 }
 
 func (s Server) handlePayloadByID(w http.ResponseWriter, r *http.Request) {
+	s.handleGet(w, r, "payloads", strings.TrimPrefix(r.URL.Path, "/api/payloads/"))
+}
+
+func (s Server) handleStartByID(w http.ResponseWriter, r *http.Request) {
+	s.handleGet(w, r, "start", strings.TrimPrefix(r.URL.Path, "/api/start/"))
+}
+
+func (s Server) handleGet(w http.ResponseWriter, r *http.Request, folder string, id string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/payloads/")
 	if !validRelayID(id) {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := os.ReadFile(s.payloadPath(id))
+	data, err := os.ReadFile(s.itemPath(folder, id))
+	if os.IsNotExist(err) && folder == "payloads" {
+		data, err = os.ReadFile(s.legacyPayloadPath(id))
+	}
 	if os.IsNotExist(err) {
 		http.NotFound(w, r)
 		return
@@ -111,23 +132,53 @@ func (s Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := os.Stat(s.payloadPath(id)); os.IsNotExist(err) {
+	if _, err := os.Stat(s.itemPath("payloads", id)); os.IsNotExist(err) {
+		if _, legacyErr := os.Stat(s.legacyPayloadPath(id)); os.IsNotExist(legacyErr) {
+			http.NotFound(w, r)
+			return
+		}
+	} else if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, inviteHTML(), id, s.publicURL(id), id)
+	fmt.Fprintf(w, inviteHTML(), id, s.publicPayloadURL(id), id)
 }
 
-func (s Server) payloadPath(id string) string {
+func (s Server) handleStartPage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/start/")
+	if !validRelayID(id) {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := os.Stat(s.itemPath("start", id)); os.IsNotExist(err) {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, startHTML(), id, s.publicStartURL(id), id)
+}
+
+func (s Server) itemPath(folder string, id string) string {
+	return filepath.Join(s.StorageDir, folder, id+".json")
+}
+
+func (s Server) legacyPayloadPath(id string) string {
 	return filepath.Join(s.StorageDir, id+".json")
 }
 
-func (s Server) publicURL(id string) string {
+func (s Server) publicPayloadURL(id string) string {
 	if s.BaseURL == "" {
 		return "/i/" + id
 	}
 	return s.BaseURL + "/i/" + id
+}
+
+func (s Server) publicStartURL(id string) string {
+	if s.BaseURL == "" {
+		return "/start/" + id
+	}
+	return s.BaseURL + "/start/" + id
 }
 
 func newRelayID() (string, error) {
@@ -190,8 +241,30 @@ a{color:#8b3f16}
 <p>Open this link with your agent:</p>
 <pre>Open this Pact request: %s</pre>
 <p>If Pact is installed, the agent should run:</p>
-<pre>pact link open %s --as &lt;your-name&gt;</pre>
+<pre>pact app open %s --as &lt;your-name&gt;</pre>
 <p>Payload API:</p>
 <pre>/api/payloads/%s</pre>
+</div></body></html>`
+}
+
+func startHTML() string {
+	return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Start a Pact</title><style>
+body{font-family:ui-sans-serif,system-ui;margin:48px;max-width:820px;line-height:1.5;color:#101418;background:#f7f4ee}
+.card{background:white;border:1px solid #e3ddd2;border-radius:18px;padding:28px;box-shadow:0 20px 60px rgba(32,24,12,.08)}
+code,pre{background:#f0ece4;padding:2px 6px;border-radius:6px}
+pre{padding:16px;overflow:auto}
+a{color:#8b3f16}
+</style></head>
+<body><div class="card">
+<h1>Start a Pact</h1>
+<p>Someone wants to start a Pact contact with you.</p>
+<p>Paste this into your agent:</p>
+<pre>Open this Pact start link: %s</pre>
+<p>If Pact is installed, the agent should run:</p>
+<pre>pact accept %s --as &lt;your-name&gt;</pre>
+<p>Start API:</p>
+<pre>/api/start/%s</pre>
 </div></body></html>`
 }

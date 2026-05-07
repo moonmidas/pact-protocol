@@ -13,6 +13,7 @@ https://github.com/moonmidas/pact-protocol
 - `cmd/pact`: Go CLI entrypoint.
 - `internal`: Protocol, local store, requests, relay, and CLI implementation.
 - `agents`: Codex/Claude/MCP instruction layer.
+- `agents/UNIVERSAL.md`: harness-neutral instructions for Codex, Claude Code, Cursor Agent, OpenCode, Pi, Hermes-style agents, and other shell-capable agents.
 - `AGENTS.md`: Repo-level instructions for coding agents using Pact.
 - `go.mod`: Go module.
 
@@ -33,6 +34,81 @@ Build the CLI from this folder:
 ```bash
 go build -o pact ./cmd/pact
 ```
+
+### Simplest Path: Start A Pact Contact
+
+Use this when the user says something like "initiate pact with Denis" or "pact with Denis":
+
+```bash
+./pact initiate denis --as esteban
+```
+
+The command creates the local `esteban` profile if needed, creates a pairing invite, uploads it to the relay, and prints one shareable link:
+
+```text
+https://wepact.online/start/<id>
+```
+
+Denis can paste that link into Codex, Claude, Claude Code, Cursor Agent, OpenCode, Pi, Hermes-style agents, or any shell-capable agent. The recipient agent should run:
+
+```bash
+./pact accept https://wepact.online/start/<id> --as denis
+```
+
+That creates Denis's local profile if needed and adds Esteban as a Pact contact. Pairing creates a contact only; it does not grant file access.
+
+### Wow Path: Local Approval App
+
+Use this when the receiver pastes a Pact link into Codex, Claude, or another agent and wants the browser approval experience:
+
+```bash
+./pact app open https://wepact.online/i/<id> --as denis
+```
+
+The command:
+
+1. creates the local `denis` profile if needed
+2. imports the hosted Pact request
+3. starts a dependency-free local web app at `http://127.0.0.1:4327/app`
+4. lets the receiver approve, counter, or reject in the browser
+
+If port `4327` is busy:
+
+```bash
+./pact app open https://wepact.online/i/<id> --as denis --addr 127.0.0.1:4328
+```
+
+Agents should show/open the printed local URL for the user. Decisions made in the app still go through Pact and write local audit records.
+
+This is the harness-neutral path for Codex, Claude Code, Claude, Cursor Agent, OpenCode, Pi, Hermes-style agents, OpenClaw-style agents, and any other agent that can run shell commands. See `agents/UNIVERSAL.md`.
+
+### Queue, Notifications, And Harness Heartbeats
+
+Pact does not assume every agent is an always-on daemon. Pact stores the queue/log/notifications; each harness can provide its own heartbeat by running one command periodically:
+
+```bash
+./pact runner tick --as denis
+```
+
+The tick command checks for unread Pact signals and prints the next safe action. Automations, cron, launchd, systemd timers, Codex, Claude Cowork, Pi, OpenCode, Hermes, and other harnesses can all schedule or invoke this same command.
+
+Humans and agents can inspect notifications directly:
+
+```bash
+./pact notify list --as denis
+./pact notify list --as denis --unread --json
+./pact notify read <notification-id> --as denis
+```
+
+To hand a bounded task to an agent, generate a continuation prompt:
+
+```bash
+./pact continue <request-id> --as denis --for codex
+./pact continue <request-id> --as denis --for claude
+./pact continue <request-id> --as denis --for generic
+```
+
+This is the first bridge between Pact's durable queue and output-first agents. The protocol keeps state and audit; the harness decides when to wake up and work.
 
 Create the sender profile once:
 
@@ -56,6 +132,12 @@ Send Denis the printed `https://wepact.online/i/<id>` link. Denis or Denis's age
 ```
 
 Opening a link imports the request into Denis's local inbox and prints the approval card with the sender, artifact name, size, preview, risk note, request ID, and approve/counter/reject commands.
+
+For the browser approval app instead of a terminal card, use:
+
+```bash
+./pact app open https://wepact.online/i/<id> --as denis
+```
 
 ### Portable Payload
 
@@ -99,6 +181,8 @@ Supported JSON operations:
 ./pact approve <request-id> --as denis --json
 ./pact counter <request-id> --as denis --message "Send a summary instead." --json
 ./pact reject <request-id> --as denis --json
+./pact notify list --as denis --json
+./pact runner tick --as denis --json
 ```
 
 Successful `inbox` response:

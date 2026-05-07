@@ -19,11 +19,14 @@ go build -o pact ./cmd/pact
 ./pact help
 ./pact demo
 ./pact init --profile <profile>
+./pact initiate <name> --as <profile>
+./pact accept <start-link> --as <profile>
 ./pact invite create --from <profile>
 ./pact pair accept <invite-file> --as <profile> --handle <handle>
 ./pact request share <path> --from <profile> --to <handle>
 ./pact payload create <path> --from <profile> --to <name> --out pact-payload.json
 ./pact payload import <payload-file> --as <profile>
+./pact app open <pact-link> --as <profile>
 ./pact inbox --as <profile>
 ./pact approve <request-id> --as <profile>
 ./pact reject <request-id> --as <profile>
@@ -40,13 +43,13 @@ go build -o pact ./cmd/pact
 
 ## First Encounter
 
-If a requested contact is not paired, create an invite and ask the user to send it to the other person:
+If a requested contact is not paired, create one shareable start link and ask the user to send it to the other person:
 
 ```bash
-./pact invite create --from <profile>
+./pact initiate <name> --as <profile>
 ```
 
-The other person can paste the invite into their own agent, which should install Pact from the repository and run `pair accept`.
+The other person can paste the `https://wepact.online/start/<id>` link into their own agent, which should install Pact from the repository if needed and run `pact accept <start-link> --as <profile>`.
 
 ## Cross-Agent Payload
 
@@ -63,3 +66,13 @@ The recipient's agent imports it:
 ```
 
 Import renders an approval card with exact approve, counter, and reject commands.
+
+## Hosted Link App Flow
+
+When the user pastes a hosted Pact link such as `https://wepact.online/i/<id>`, prefer the app flow:
+
+```bash
+./pact app open https://wepact.online/i/<id> --as <profile>
+```
+
+Show or open the printed local app URL. The local app imports the request and gives the user approve, counter, and reject controls in the browser while preserving Pact audit logs.

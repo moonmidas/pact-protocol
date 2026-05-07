@@ -124,6 +124,21 @@ type GrantRecord struct {
 	ExpiresAt    *time.Time `json:"expires_at"`
 }
 
+type NotificationRecord struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	Source    string    `json:"source"`
+	Subject   string    `json:"subject"`
+	Profile   string    `json:"profile"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	RequestID string    `json:"request_id,omitempty"`
+	State     string    `json:"state"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type AuditEvent struct {
 	ID             string    `json:"id"`
 	Timestamp      time.Time `json:"timestamp"`

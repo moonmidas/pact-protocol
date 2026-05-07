@@ -33,6 +33,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInit(args[1:], stdout, stderr)
 	case "invite":
 		return runInvite(args[1:], stdout, stderr)
+	case "initiate":
+		return runInitiate(args[1:], stdout, stderr)
+	case "accept":
+		return runAccept(args[1:], stdout, stderr)
 	case "pair":
 		return runPair(args[1:], stdout, stderr)
 	case "request":
@@ -55,6 +59,14 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runRelay(args[1:], stdout, stderr)
 	case "link":
 		return runLink(args[1:], stdout, stderr)
+	case "app":
+		return runApp(args[1:], stdout, stderr)
+	case "notify":
+		return runNotify(args[1:], stdout, stderr)
+	case "continue":
+		return runContinue(args[1:], stdout, stderr)
+	case "runner":
+		return runRunner(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		printUsage(stderr)
@@ -68,6 +80,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  init")
 	fmt.Fprintln(w, "  invite create")
+	fmt.Fprintln(w, "  initiate")
+	fmt.Fprintln(w, "  accept")
 	fmt.Fprintln(w, "  pair accept")
 	fmt.Fprintln(w, "  request share")
 	fmt.Fprintln(w, "  inbox")
@@ -81,6 +95,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  relay serve")
 	fmt.Fprintln(w, "  link create")
 	fmt.Fprintln(w, "  link open")
+	fmt.Fprintln(w, "  app open")
+	fmt.Fprintln(w, "  notify list")
+	fmt.Fprintln(w, "  notify read")
+	fmt.Fprintln(w, "  continue")
+	fmt.Fprintln(w, "  runner tick")
 }
 
 func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -786,16 +805,18 @@ func runLinkOpen(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 type cliResponse struct {
-	OK        bool           `json:"ok"`
-	Operation string         `json:"operation"`
-	Profile   string         `json:"profile,omitempty"`
-	Count     *int           `json:"count,omitempty"`
-	Requests  *[]requestView `json:"requests,omitempty"`
-	SourceURL string         `json:"source_url,omitempty"`
-	Request   *requestView   `json:"request,omitempty"`
-	Decision  *decisionView  `json:"decision,omitempty"`
-	Actions   *actionView    `json:"actions,omitempty"`
-	Error     *errorView     `json:"error,omitempty"`
+	OK            bool                `json:"ok"`
+	Operation     string              `json:"operation"`
+	Profile       string              `json:"profile,omitempty"`
+	Count         *int                `json:"count,omitempty"`
+	Requests      *[]requestView      `json:"requests,omitempty"`
+	Notifications *[]notificationView `json:"notifications,omitempty"`
+	Notification  *notificationView   `json:"notification,omitempty"`
+	SourceURL     string              `json:"source_url,omitempty"`
+	Request       *requestView        `json:"request,omitempty"`
+	Decision      *decisionView       `json:"decision,omitempty"`
+	Actions       *actionView         `json:"actions,omitempty"`
+	Error         *errorView          `json:"error,omitempty"`
 }
 
 type requestView struct {

@@ -8,6 +8,35 @@ Pact is a local-first protocol and CLI for permissioned agent work. It lets one 
 
 The current implementation is a Go CLI in this repository. It uses local JSON files under `.pact-local/`.
 
+Pact is harness-neutral. Codex, Claude Code, Claude, Cursor Agent, OpenCode, Pi, Hermes-style agents, OpenClaw-style agents, and similar tools should all use the same surface:
+
+```text
+GitHub repo -> Go CLI -> pact app open -> localhost approval UI
+```
+
+See `agents/UNIVERSAL.md` for the common contract.
+
+Pact stores the queue/log/notifications. Harnesses provide the heartbeat by invoking:
+
+```bash
+./pact runner tick --as <profile>
+```
+
+For output-first agents, use:
+
+```bash
+./pact continue <request-id> --as <profile> --for <codex|claude|generic>
+```
+
+Then run the generated bounded prompt in the agent.
+
+For the first encounter, prefer a shareable start link:
+
+```bash
+./pact initiate <person-name> --as <user-profile>
+./pact accept https://wepact.online/start/<id> --as <recipient-profile>
+```
+
 ## Install Or Verify
 
 From the repository root:
@@ -47,6 +76,14 @@ go build -o pact ./cmd/pact
 
 Then summarize the available commands.
 
+If the user has a Pact link and wants the app experience, prefer:
+
+```bash
+./pact app open <pact-link> --as <recipient-profile>
+```
+
+Then show/open the printed local URL, usually `http://127.0.0.1:4327/app`.
+
 ### "Show me how Pact works"
 
 Run:
@@ -59,18 +96,23 @@ Then explain where the invite, request, received artifact, and audit logs were w
 
 ### "Pact with Denis"
 
-If there is no paired contact yet, create an invite for the user's profile:
+If there is no paired contact yet, create a start link for the user's profile:
 
 ```bash
-./pact init --profile <user-profile>
-./pact invite create --from <user-profile>
+./pact initiate denis --as <user-profile>
 ```
 
-Give the user the invite path or JSON contents to send to Denis. Explain that Denis can paste the invite into his agent after installing Pact.
+Give the user the printed `https://wepact.online/start/<id>` link to send to Denis. Explain that Denis can paste the link into his agent, and Denis's agent should install Pact if needed and run `pact accept <start-link> --as denis`.
 
 ### "Accept this Pact invite"
 
-Save the invite JSON to a local file if needed, then run:
+If the user pasted a `https://wepact.online/start/<id>` link, run:
+
+```bash
+./pact accept <start-link> --as <recipient-profile>
+```
+
+If the user pasted an invite JSON file instead, save the invite JSON to a local file if needed, then run:
 
 ```bash
 ./pact init --profile <recipient-profile>
@@ -111,7 +153,15 @@ Tell the user to send the printed `https://wepact.online/i/<id>` link to Denis.
 
 ### "Open this Pact link"
 
-Initialize the recipient profile if needed, then run:
+For the best first-time experience, run the local approval app:
+
+```bash
+./pact app open <pact-link> --as <recipient-profile>
+```
+
+This initializes the recipient profile if needed, imports the request, starts the local approval UI, and lets the user approve, counter, or reject in the browser.
+
+If the user wants terminal-only output instead, run:
 
 ```bash
 ./pact init --profile <recipient-profile>
@@ -119,6 +169,21 @@ Initialize the recipient profile if needed, then run:
 ```
 
 After opening, show the approval card. Explain that approving copies the artifact into the recipient's local received folder, rejecting leaves it untouched, and countering asks for different terms.
+
+### "Check Pact" / "Any Pact notifications?"
+
+Run:
+
+```bash
+./pact runner tick --as <profile>
+```
+
+If there are signals, show them and offer:
+
+```bash
+./pact app open <pact-link> --as <profile>
+./pact continue <request-id> --as <profile> --for codex
+```
 
 ### "Import this Pact payload"
 
